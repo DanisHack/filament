@@ -382,6 +382,9 @@ void FRenderer::renderJob(ArenaScope& arena, FView& view) {
             TextureFormat::RGBA8 : getLdrFormat(translucent); // e.g. RGB8 or RGBA8
 
     if (hasPostProcess) {
+
+        input = ppm.dof(fg, input, cameraInfo);
+
         if (toneMapping) {
             input = ppm.toneMapping(fg, input, ldrFormat, translucent, fxaa, scale,
                     view.getBloomOptions(), dithering);

@@ -25,6 +25,7 @@
 // to one of your CPP source files to create the implementation. See gltf_viewer.cpp for an example.
 
 #include <filament/Box.h>
+#include <filament/DebugRegistry.h>
 #include <filament/Engine.h>
 #include <filament/IndirectLight.h>
 #include <filament/Scene.h>
@@ -500,6 +501,14 @@ void SimpleViewer::updateUserInterface() {
         ImGui::SliderFloat("Scattering Size", &mFogOptions.inScatteringSize, 0.0f, 100.0f);
         ImGui::Checkbox("Color from IBL", &mFogOptions.fogColorFromIbl);
         ImGui::ColorPicker3("Color", mFogOptions.color.v);
+    }
+
+    if (ImGui::CollapsingHeader("DoF")) {
+        DebugRegistry& debug = mEngine->getDebugRegistry();
+        ImGui::SliderFloat("focus_point",
+                debug.getPropertyAddress<float>("d.dof.focus_point"), 0.0f, 100.0f);
+        ImGui::SliderFloat("focus_scale",
+                debug.getPropertyAddress<float>("d.dof.focus_scale"), 0.0f, 100.0f);
     }
 
     mView->setDithering(mEnableDithering ? View::Dithering::TEMPORAL : View::Dithering::NONE);

@@ -388,6 +388,10 @@ public:
         struct {
             bool camera_at_origin = true;
         } view;
+        struct {
+            float focus_point = 10.0;
+            float focus_scale = 10.0;
+        } dof;
          matdbg::DebugServer* server = nullptr;
     } debug;
 };

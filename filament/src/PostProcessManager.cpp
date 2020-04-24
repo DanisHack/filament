@@ -54,6 +54,11 @@ PostProcessManager::PostProcessMaterial::PostProcessMaterial(FEngine& engine,
     // TODO: After all materials using this class have been converted to the post-process material
     //       domain, load both OPAQUE and TRANSPARENT variants here.
     mProgram = mMaterial->getProgram(0);
+
+    FDebugRegistry& debugRegistry = engine.getDebugRegistry();
+    debugRegistry.registerProperty("d.dof.focus_point", &engine.debug.dof.focus_point);
+    debugRegistry.registerProperty("d.dof.focus_scale", &engine.debug.dof.focus_scale);
+
 }
 
 PostProcessManager::PostProcessMaterial::PostProcessMaterial(
@@ -118,6 +123,7 @@ void PostProcessManager::init() noexcept {
     mBlit[2] = PostProcessMaterial(mEngine, MATERIALS_BLITHIGH_DATA, MATERIALS_BLITHIGH_SIZE);
     mTonemapping = PostProcessMaterial(mEngine, MATERIALS_TONEMAPPING_DATA, MATERIALS_TONEMAPPING_SIZE);
     mFxaa = PostProcessMaterial(mEngine, MATERIALS_FXAA_DATA, MATERIALS_FXAA_SIZE);
+    mDoF = PostProcessMaterial(mEngine, MATERIALS_DOF_DATA, MATERIALS_DOF_SIZE);
 
     // UBO storage size.
     // The effective kernel size is (kMaxPositiveKernelSize - 1) * 4 + 1.
@@ -157,6 +163,7 @@ void PostProcessManager::terminate(DriverApi& driver) noexcept {
     mBlit[2].terminate(engine);
     mTonemapping.terminate(engine);
     mFxaa.terminate(engine);
+    mDoF.terminate(engine);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -314,6 +321,76 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::fxaa(FrameGraph& fg,
             });
 
     return ppFXAA.getData().output;
+}
+
+FrameGraphId<FrameGraphTexture> PostProcessManager::dof(FrameGraph& fg,
+        FrameGraphId<FrameGraphTexture> input, const CameraInfo& cameraInfo) noexcept {
+
+    FEngine& engine = mEngine;
+    Handle<HwRenderPrimitive> const& fullScreenRenderPrimitive = engine.getFullScreenRenderPrimitive();
+
+    struct PostProcessDoF {
+        FrameGraphId<FrameGraphTexture> color;
+        FrameGraphId<FrameGraphTexture> depth;
+        FrameGraphId<FrameGraphTexture> output;
+        FrameGraphRenderTargetHandle rt;
+    };
+
+    FrameGraphId<FrameGraphTexture> depth = fg.getBlackboard().get<FrameGraphTexture>("structure");
+    assert(depth.isValid());
+
+    auto& ppDoF = fg.addPass<PostProcessDoF>("dof",
+            [&](FrameGraph::Builder& builder, auto& data) {
+                auto const& inputDesc = fg.getDescriptor(input);
+                data.color = builder.sample(input);
+                data.depth = builder.sample(depth);
+                data.output = builder.createTexture("dof output", {
+                        .width = inputDesc.width,
+                        .height = inputDesc.height,
+                        .format = inputDesc.format
+                });
+                data.output = builder.write(data.output);
+                data.rt = builder.createRenderTarget("DoF Target", {
+                        .attachments = { data.output } });
+            },
+            [=](FrameGraphPassResources const& resources,
+                auto const& data, DriverApi& driver) {
+                auto const& desc = resources.getDescriptor(data.color);
+                auto const& color = resources.getTexture(data.color);
+                auto const& depth = resources.getTexture(data.depth);
+                auto const& out = resources.get(data.rt);
+
+                PostProcessMaterial& material = mDoF;
+                FMaterialInstance* const mi = material.getMaterialInstance();
+                mi->setParameter("uTexture", color, {
+                        .filterMag = SamplerMagFilter::LINEAR,
+                        .filterMin = SamplerMinFilter::LINEAR
+                });
+                mi->setParameter("uDepth", depth, {
+                        .filterMin = SamplerMinFilter::NEAREST_MIPMAP_NEAREST
+                });
+
+                mi->setParameter("uPixelSize", float2{
+                        1.0f / desc.width, 1.0f / desc.height });
+
+
+                float d = std::max(cameraInfo.zn, mEngine.debug.dof.focus_point);
+                float s = mEngine.debug.dof.focus_scale;
+                float fp = 0.5f * (cameraInfo.projection[3].z / d - (cameraInfo.projection[2].z - 1.0f));
+                float fs = s;
+
+                mi->setParameter("focusPoint", fp);
+                mi->setParameter("focusScale", fs);
+                mi->commit(driver);
+                mi->use(driver);
+
+                PipelineState pipeline(material.getPipelineState());
+                driver.beginRenderPass(out.target, out.params);
+                driver.draw(pipeline, fullScreenRenderPrimitive);
+                driver.endRenderPass();
+            });
+
+    return ppDoF.getData().output;
 }
 
 FrameGraphId<FrameGraphTexture> PostProcessManager::opaqueBlit(FrameGraph& fg,
@@ -770,7 +847,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::gaussianBlurPass(FrameGraph&
         FrameGraphId<FrameGraphTexture> output, uint8_t dstLevel,
         bool reinhard, size_t kernelWidth, float sigmaRatio) noexcept {
 
-    const float sigma = (kernelWidth + 1) / sigmaRatio;
+    const float sigma = (kernelWidth + 1.0f) / sigmaRatio;
 
     Handle<HwRenderPrimitive> fullScreenRenderPrimitive = mEngine.getFullScreenRenderPrimitive();
 
